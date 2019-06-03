@@ -23,20 +23,21 @@ MAX_GET_DATA_LISTS = 10
 MAX_NUMBER_OF_TX = 50
 DATABASE_SVR_NAME = "bcSvr1" ####################
 DATABASE_SVR_IP = "localhost"
-DATABASE_SVR_PORT = 3301
+DATABASE_SVR_PORT = 3300
 DATABASE_SVR_USER = "root"
 DATABASE_SVR_PW = "root"
 DATABASE_BC_TABLE = "blockchain" ########################
 DATABASE_ND_TABLE = "node"   ########################
-DATABASE_TPSVR_IP = "http://192.168.110.22:8099"
+DATABASE_TPSVR_IP = "http://localhost:8089"
+DATABASE_SVR_LIST = {'192.168.110.16': 3300}
+DATABASE_NODE_LIST = {'192.168.110.16': 8099}
+MASTER = True
+SERVE = False
 
 g_difficulty = 2
-SVR_LIST = {'127.0.0.1': 8096, '192.168.110.19' : 3300, '192.168.110.23' : 3300}
 g_receiveNewBlock = "/node/receiveNewBlock"
 g_maximumTry = 100
 g_maximumGetTx = 50
-g_nodeList = {'127.0.0.1': '8096'}  # trusted server list, should be checked manually
-engine = create_engine("mysql+pymysql://root:root@192.168.110.16:3300/bcSvr1")
 
 class Block:
 
@@ -47,8 +48,6 @@ class Block:
         self.data = data
         self.currentHash = currentHash
         self.proof = proof
-        # -----------------------------------------V01 : 완
-        # 머클트리로 추출한 해쉬
         self.merkleHash = merkleHash
 
     def toJSON(self):
@@ -82,29 +81,28 @@ def generateGenesisBlock(timestamp, proof):
     reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
     try:
         URL = DATABASE_TPSVR_IP + "/txData/new"
-        print(URL)
         res = requests.post(URL, headers=reqHeader, data=json.dumps(GenesisTxData))
         if res.status_code == 200:
-            #                 print(URL + " sent ok.")
             print("Genesis txData sent ok.")
+
+            txData, txTF = getTxData(0)
+
+            merkleHash = calculateMerkleHash(txData)
+            tempHash = calculateHash(0, '0', timestamp, proof, merkleHash)
+            genesisBlockData = getStrTxData(txData)
+
+            newBlock = Block(0, '0', timestamp, genesisBlockData, tempHash, proof, merkleHash)
         else:
-            #                 print(URL + " responding error " + res.status_code)
             print(URL + " responding error " + 404)
             isSuccess = False
-            return newBlock, isSuccess
     except:
-        print("Trusted Server " + URL + " is not responding.")
+        print("transaction_pool server :  " + DATABASE_TPSVR_IP + " is not responding.")
         isSuccess = False
-        return newBlock, isSuccess
+    finally:
+        if isSuccess:
+            print("Success to generate genesis block : \n" + str(newBlock.__dict__))
 
-    txData, txTF = getTxData(0)
-
-    merkleHash = calculateMerkleHash(txData)
-    tempHash = calculateHash(0, '0', timestamp, proof, merkleHash)
-    genesisBlockData = getStrTxData(txData)
-    return Block(0, '0', timestamp, genesisBlockData, tempHash, proof, merkleHash), isSuccess
-
-
+    return newBlock, isSuccess
 
 def calculateHash(index, previousHash, timestamp, proof, merkleHash):
     value = str(index) + str(previousHash) + str(timestamp) + str(proof) + merkleHash
@@ -167,18 +165,16 @@ def calculateHashForBlock(block):
 
 
 def getLatestBlock(blockchain):
-    return blockchain[len(blockchain) - 1]
-
+    lengthOfBlockChain = len(blockchain) - 1
+    if len(blockchain) == 0 :
+        lengthOfBlockChain = 0;
+    return blockchain[lengthOfBlockChain]
 
 def generateNextBlock(blockList, txData, timestamp, proof):
-    print("generateNextBlockㅎㅎ")
-    print(blockList)
-    print(txData)
-    print(timestamp)
-    print(proof)
+    print("Trying to generate next block...........")
     isSuccess = True
     newBlock = None
-    blockData = []
+
     try:
         previousBlock = getLatestBlock(blockList)
         nextIndex = int(previousBlock.index) + 1
@@ -196,76 +192,102 @@ def generateNextBlock(blockList, txData, timestamp, proof):
         newBlock = Block(nextIndex, previousBlock.currentHash, nextTimestamp, strTxData, nextHash, proof, merkleHash)
 
     except :
-        print("generateNextBlockㅎㅎexcept")
+        print("Fail to mine next block")
         isSuccess = False
+
+    if isSuccess :
+        print("Success to generate next block : \n" + str(newBlock.__dict__))
     return newBlock, isSuccess
 
 
 def writeBlockchain(blockchain):
-    print(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), "writeBlockchainㅎㅎ")
+    print("Trying write block to blockchain table..........")
     tableBlockList, isSuccess = readBlockchain()
-    print(tableBlockList, isSuccess, "ㅎㅎ")
-    urlBlockList = []
-    blockchainList = []
-    blockchainList.append(blockchain)
+
     result = 1
 
     if isSuccess :
-        try :
-            for block in blockchainList:
-                blockList = [block.index, block.previousHash, str(block.timestamp), block.data, block.currentHash, block.proof, block.merkleHash]
-                urlBlockList.append(blockList)
-            last_line_number = len(tableBlockList)
-            print(last_line_number)
-            for line in tableBlockList:
-                print(tableBlockList.line_num, last_line_number, "g")
-                if last_line_number == len(tableBlockList) :
-                    lastBlock = Block(line[0], line[1], line[2], line[3], line[4], line[5], line[6])
-            if int(lastBlock.index) + 1 != int(blockchainList[-1][0]):
-                print("index sequence mismatch")
-                if int(lastBlock.index) == int(blockchainList[-1][0]):
-                    print("db has already been updated")
-                    return
-        except:
-            print("Failed to in check current db \n or maybe there's some other reason")
-            pass
+        if len(tableBlockList) != 0 :
+            lastBlock = getLatestBlock(tableBlockList)
 
-        conn = pymysql.connect(
-            host=DATABASE_SVR_IP,
-            port=DATABASE_SVR_PORT,
-            user=DATABASE_SVR_USER,
-            passwd=DATABASE_SVR_PW,
-            database=DATABASE_SVR_NAME)
+            if lastBlock.index + 1 != blockchain.index :
+                print("Failed to write new block to database. new block is invalid.")
+                result = -1
 
-        try:
+        if result == 1 :
+            conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, passwd=DATABASE_SVR_PW, \
+                                   database=DATABASE_SVR_NAME)
+
+            try:
+                with conn.cursor() as curs:
+                    print(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
+                                        blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash)
+                    sql = "INSERT INTO " + DATABASE_BC_TABLE + " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                    curs.execute(sql,(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
+                                        blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash))
+                    conn.commit()
+            except :
+                print("Failed to insert new block on database.")
+            finally:
+                conn.close()
+
+    else :
+        print("Failed to read blockchain data from database")
+        result = -1
+
+    if result == 1 :
+        print("Succeed to write new block on database.")
+    return result
+
+def writeAllBlockchain(blockchainList):
+
+    result = 1
+    conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, passwd=DATABASE_SVR_PW, \
+                           database=DATABASE_SVR_NAME)
+    try:
+        print("Trying delete all data on table " + DATABASE_BC_TABLE + " for renewal...........")
+        with conn.cursor() as curs:
+            sql = "DELETE FROM " + DATABASE_BC_TABLE
+            curs.execute(sql)
+            conn.commit()
+    except:
+        print("Failed to delete all data.")
+        result = -1
+    finally:
+        conn.close()
+
+    print("Trying write block to blockchain table..........")
+    conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, passwd=DATABASE_SVR_PW, \
+                               database=DATABASE_SVR_NAME, charset = 'utf-8')
+
+    try:
+        for blockchain in blockchainList:
             with conn.cursor() as curs:
                 print(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
                                     blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash)
                 sql = "INSERT INTO " + DATABASE_BC_TABLE + " VALUES (%s,%s,%s,%s,%s,%s,%s)"
                 curs.execute(sql,(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
-                                    blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash))
-                conn.commit()
-        except :
-            print("fail to read blockchain table")
-        finally:
-            conn.close()
-
-
-    else :
-        print("Failed to read table")
+                                        blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash))
+            conn.commit()
+    except :
+        print("Failed to insert new block on database.")
         result = -1
+    finally:
+        conn.close()
+
     if result == 1 :
-        print("Complete updating blockchain")
+        print("Succeed to write new block on database.")
     return result
 
 def readBlockchain():
     print("readBlockchain")
-    result = False
+    isSuccess = False
     blockDataList = []
     conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, password=DATABASE_SVR_PW, \
                            db=DATABASE_SVR_NAME, charset='utf8')
 
     try:
+        print("Trying to read blockchain data from " + DATABASE_BC_TABLE + " on " + DATABASE_SVR_NAME + "...........")
         with conn.cursor() as cursor :
             sql = "select * from " + DATABASE_BC_TABLE
             cursor.execute(sql)
@@ -274,15 +296,26 @@ def readBlockchain():
             for data in rows:
                 block = Block(data[0], data[1], data[2], data[3], data[4], data[5], data[6])
                 blockDataList.append(block)
-            result = True
+            isSuccess = True
     except:
-        print("connect failed or other reason")
+        print("Failed to read blockchain data from " + DATABASE_BC_TABLE + " on " + DATABASE_SVR_NAME)
     finally:
         conn.close()
-    return blockDataList, result
+
+    if isSuccess :
+        print("Success to read blockchain data from " + DATABASE_BC_TABLE + " on " + DATABASE_SVR_NAME)
+    return blockDataList, isSuccess
 
 
-def updateTx(blockData):
+def updateTx(blockData, mode = 'update'):
+
+    if mode == 'update' :
+        query = '/txData/update'
+    else :
+        query = '/txData/rollback'
+
+    result = 1
+
     phrase = re.compile(
         r"\w+[-]\w+[-]\w+[-]\w+[-]\w+")
 
@@ -291,85 +324,112 @@ def updateTx(blockData):
     print(matchList)
     if len(matchList) == 0:
         print("No Match Found! " + str(blockData.data) + "block idx: " + str(blockData.index))
+        result = -1
+    else :
+        reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
 
-        return
-    reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
+        blockDict = []
+        blockDict.append(blockData.__dict__)
+        print(blockDict)
+        try:
+            URL = DATABASE_TPSVR_IP + query
+            print(URL)
+            res = requests.post(URL, headers=reqHeader, data=json.dumps(blockDict))
+            if res.status_code == 200:
+                print("sent ok.")
+            else:
+                print(URL + " responding error " + 404)
+                result = -1
+        except:
+            print("Trusted Server " + URL + " is not responding.")
+            result = -1
 
-    blockDict = []
-    blockDict.append(blockData.__dict__)
-    print(blockDict)
-    try:
-        URL = DATABASE_TPSVR_IP + "/txData/update"
-        print(URL)
-        res = requests.post(URL, headers=reqHeader, data=json.dumps(blockDict))
-        if res.status_code == 200:
-            #                 print(URL + " sent ok.")
-            print("sent ok.")
-            return 1
-        else:
-            #                 print(URL + " responding error " + res.status_code)
-            print(URL + " responding error " + 404)
-            return -1
-    except:
-        print("Trusted Server " + URL + " is not responding.")
-        return -1
-    print('txData updated')
-
+    if result == 1 :
+        if mode == 'update' :
+            print('Succeed to update')
+        else :
+            print('Succeed to rollback')
+    return result
 
 def getTxData(chooseData):
-    print("getTxData입니다.")
+
     url = DATABASE_TPSVR_IP + "/getTxData/zero"
     if (chooseData == 1) :
         url = DATABASE_TPSVR_IP + "/getTxData/all"
-    txList = []
+    txData = []
+    isSuccess = True
     try :
-        r = requests.get(url=url)
-        if r.status_code == 200 :
-            print(200)
-            print(r.url)
-            tmpData = json.loads(r.text)
-            return tmpData, True
-        else :
-            return [], False
-    except:
-        return [], False
+        print("Trying to get txData from " + DATABASE_TPSVR_IP + "...........")
+        res = requests.get(url=url)
+        if res.status_code == 200 :
+            txData = json.loads(res.text)
 
-def mineNewBlock(difficulty=g_difficulty):
+            res.close()
+        else :
+            isSuccess = False
+    except:
+        isSuccess = False
+
+    return txData, isSuccess
+def mineNewBlock():
     blockList, blockTF = readBlockchain()
     urlData, txTF = getTxData(0)
-    print(urlData, txTF, "getTxData")
     timestamp = time.time()
     proof = 0
 
     if blockTF and txTF :
-        if len(selectList) == 0 :
-            newBlock, isSuccessBc = generateGenesisBlock(timestamp, proof) #gensis가 잘 생성됐으면
-        else:  # txdata가 있으면
-            newBlock, isSuccessBc = generateNextBlock(blockList, urlData, timestamp, proof)  ###if 처리 아직 안함
-            print(newBlock, isSuccess)
+        if len(blockList) == 0 :
+            newBlock, isSuccessBc = generateGenesisBlock(timestamp, proof)
+        else:
+            newBlock, isSuccessBc = generateNextBlock(blockList, urlData, timestamp, proof)
+            print(newBlock, isSuccessBc)
 
         if isSuccessBc :
-            upResult = updateTx(newBlock)
-            if upResult == 1 :
-                wrResult = writeBlockchain(newBlock)
-                if wrResult == 1 :
-                    broadcastNewBlock()
-                else :
-                    print("Fail to write new block on table ")
-                    return
-            else :
-                print("Failed to update txdata on transaction pool table used create block")
-                return
+            upResult = updateTx(newBlock, mode = 'update')
         else :
-            print("Fail Generate NewBlock")
-        return
+            print("mineNewBlock : Failed to generate NewBlock")
+            return
+
+        if upResult == 1 :
+            wrResult = writeBlockchain(newBlock)
+        else :
+            print("mineNewBlock : Failed to update txdata on transaction pool table used create block")
+            rollBackSuccess = updateTx(newBlock, mode = 'rollback')
+            if rollBackSuccess == 1 :
+                print("mineNewBlock : Succeed to rollback txData")
+            return
+
+        if wrResult == 1 :
+            print("mineNewBlock : Succeed to write new block on table ")
+            broadResult = broadcastNewBlock(newBlock)
+        else :
+            print("mineNewBlock : Fail to write new block on table ")
+            rollBackSuccess = updateTx(newBlock, mode='rollback')
+            if rollBackSuccess == 1 :
+                print("mineNewBlock : Succeed to rollback txData")
+            return
+
+        if broadResult :
+            print("mineNewBlock : Succeed broadcasting new block")
+            return
+        else :
+            print("mineNewBlock : Failed to broadcasting new block")
+            syncSuccess = syncBlockChain()
+
+        if syncSuccess :
+            print("mineNewBlock : Succeed to rollback txData")
+        else :
+            print("mineNewBlock : Failed to sync all block data")
+            rollBackSuccess = updateTx(newBlock, mode='rollback')
+            if rollBackSuccess == 1:
+                print("mineNewBlock : Succeed to rollback txData")
+            return
     else :
-        print("There's no Transaction pool data in Url.")
+        print("mineNewBlock : There's no Transaction pool data in Url.")
         return
 
 def mine():
     mineNewBlock()
-
 
 def isSameBlock(block1, block2):
     if str(block1.index) != str(block2.index):
@@ -384,111 +444,163 @@ def isSameBlock(block1, block2):
         return False
     elif str(block1.proof) != str(block2.proof):
         return False
-    elif str(block1.merkleHash) != str(block.merkleHash):
+    elif str(block1.merkleHash) != str(block2.merkleHash):
         return False
     return True
 
+# 외부에서 받은 블록들을 비교한다(순서 6개의 경우: [1,2], [2,3] ... [5,6]
+def isValidNewBlock(newBlock, previousBlock):
+    if int(previousBlock.index) + 1 != int(newBlock.index):
+        print('Indices Do Not Match Up')
+        return False
+    # 체이닝이 맞는지
+    elif previousBlock.currentHash != newBlock.previousHash:
+        print("Previous hash does not match")
+        return False
+    # 해쉬검증
+    elif calculateHashForBlock(newBlock) != newBlock.currentHash:
+        print("Hash is invalid")
+        return False
+    elif newBlock.currentHash[0:g_difficulty] != '0' * g_difficulty:
+        print("Hash difficulty is invalid")
+        return False
+    return True
 
-# # 외부에서 받은 블록들을 비교한다(순서 6개의 경우: [1,2], [2,3] ... [5,6]
-# def isValidNewBlock(newBlock, previousBlock):
-#     if int(previousBlock.index) + 1 != int(newBlock.index):
-#         print('Indices Do Not Match Up')
-#         return False
-#     # 체이닝이 맞는지
-#     elif previousBlock.currentHash != newBlock.previousHash:
-#         print("Previous hash does not match")
-#         return False
-#     # 해쉬검증
-#     elif calculateHashForBlock(newBlock) != newBlock.currentHash:
-#         print("Hash is invalid")
-#         return False
-#     elif newBlock.currentHash[0:g_difficulty] != '0' * g_difficulty:
-#         print("Hash difficulty is invalid")
-#         return False
-#     return True
-#
-# def isValidChain(bcToValidate):
-#     genesisBlock = []
-#     bcToValidateForBlock = []
-#
-#     # Read GenesisBlock
-#     try:
-#         with open(g_bcFileName, 'r', newline='') as file:
-#             blockReader = csv.reader(file)
-#             for line in blockReader:
-#                 block = Block(line[0], line[1], line[2], line[3], line[4], line[5], line[6])
-#                 genesisBlock.append(block)
-#     #                break
-#     except:
-#         print("file open error in isValidChain")
-#         return False
-#
-#     # transform given data to Block object
-#     for line in bcToValidate:
-#         # print(type(line))
-#         # index, previousHash, timestamp, data, currentHash, proof
-#         block = Block(line['index'], line['previousHash'], line['timestamp'], line['data'], line['currentHash'],
-#                       line['proof'], line['merkleHash'])
-#         bcToValidateForBlock.append(block)
-#
-#     # if it fails to read block data  from db(csv)
-#     if not genesisBlock:
-#         print("fail to read genesisBlock")
-#         return False
-#
-#     # compare the given data with genesisBlock
-#     if not isSameBlock(bcToValidateForBlock[0], genesisBlock[0]):
-#         print('Genesis Block Incorrect')
-#         return False
-#
-#     # tempBlocks = [bcToValidateForBlock[0]]
-#     # for i in range(1, len(bcToValidateForBlock)):
-#     #    if isValidNewBlock(bcToValidateForBlock[i], tempBlocks[i - 1]):
-#     #        tempBlocks.append(bcToValidateForBlock[i])
-#     #    else:
-#     #        return False
-#
-#     for i in range(0, len(bcToValidateForBlock)):
-#         if isSameBlock(genesisBlock[i], bcToValidateForBlock[i]) == False:
-#             return False
-#
-#     return True
+def isValidChain(bcToValidate):
+    genesisBlock = []
+    bcToValidateForBlock = []
 
-
-def addNode(queryStr):
-    result = 1
-    conn = pymysql.connect(
-        host=DATABASE_SVR_IP,
-        port =DATABASE_SVR_PORT,
-        user=DATABASE_SVR_USER,
-        passwd=DATABASE_SVR_PW,
-        database=DATABASE_SVR_NAME)
+    # Read GenesisBlock
     try:
+        blockReader = readBlockchain()
+        for line in blockReader:
+            block = Block(line[0], line[1], line[2], line[3], line[4], line[5], line[6])
+            genesisBlock.append(block)
+    except:
+        print("file open error in isValidChain")
+        return False
+
+    # transform given data to Block object
+    for line in bcToValidate:
+        # print(type(line))
+        # index, previousHash, timestamp, data, currentHash, proof
+        block = Block(line['index'], line['previousHash'], line['timestamp'], line['data'], line['currentHash'],
+                      line['proof'], line['merkleHash'])
+        bcToValidateForBlock.append(block)
+
+    # if it fails to read block data  from db(csv)
+    if not genesisBlock:
+        print("fail to read genesisBlock")
+        return False
+
+    # compare the given data with genesisBlock
+    if not isSameBlock(bcToValidateForBlock[0], genesisBlock[0]):
+        print('Genesis Block Incorrect')
+        return False
+
+    # tempBlocks = [bcToValidateForBlock[0]]
+    # for i in range(1, len(bcToValidateForBlock)):
+    #    if isValidNewBlock(bcToValidateForBlock[i], tempBlocks[i - 1]):
+    #        tempBlocks.append(bcToValidateForBlock[i])
+    #    else:
+    #        return False
+
+    for i in range(0, len(bcToValidateForBlock)):
+        if isSameBlock(genesisBlock[i], bcToValidateForBlock[i]) == False:
+            return False
+
+    return True
+
+
+def addNode(recievedNode, mode='new'):
+    for getNode in recievedNode :
+        if mode == 'new':
+            newNode = Node(getNode['ip'], str(getNode['port']), "0")
+        else:
+            newNode = Node(getNode['ip'], str(getNode['port']), str((getNode['tryConnect'])))
+
+    result = 1
+    sameNodeFound = False
+    conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, passwd=DATABASE_SVR_PW, \
+                           database=DATABASE_SVR_NAME, charset='utf8')
+    try:
+        print("Trying to find new node on database...........")
         with conn.cursor() as cursor:
-            sql = '''Select ip, port FROM testnode1 WHERE ip = %s AND port = %s'''
-            cursor.execute(sql,(queryStr[0], queryStr[1]))
+            sql = "Select ip, port FROM " + DATABASE_ND_TABLE + " WHERE ip = %s AND port = %s"
+            cursor.execute(sql, (newNode.ip, newNode.port))
             rows = cursor.fetchall()
             conn.commit()
-        if len(rows) == 0 :
-            try:
-                with conn.cursor() as cursor:
-                    sql = """insert into testnode1 VALUES (%s,%s,%s) """
-                    cursor.execute(sql,(queryStr[0], queryStr[1], 0))
-                    conn.commit()
-                    print('new node written')
-            except:
-                result = 0
-            finally:
-                conn.close()
-        else :
-            print("requested node is already exists")
-            result = -1
+        if len(rows) != 0:
+            print("new node is already existed.")
+            sameNodeFound = True
     except:
-        result = 0
+        print("Failed to access nodelist database.")
+        result = -1
+    finally:
+        conn.close()
+
+    if not sameNodeFound :
+        conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER,
+                               passwd=DATABASE_SVR_PW, \
+                               database=DATABASE_SVR_NAME, charset='utf8')
+        try:
+            print("Trying to add new node on database...........")
+            with conn.cursor() as curs:
+                sql = "INSERT INTO " + DATABASE_ND_TABLE + " VALUES (%s,%s,%s)"
+                curs.execute(sql, (newNode.ip, newNode.port, newNode.tryConnect))
+                conn.commit()
+            print('Success to write new node on' + DATABASE_ND_TABLE + ".")
+        except:
+            print("Failed to access nodelist database.")
+            result = -1
+        finally:
+            conn.close()
+    else:
+        result = -1
+
+    if mode == 'new' :
+        reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
+        newNodeList = []
+        newNodeList.append(newNode.__dict__)
+        for key, value in DATABASE_NODE_LIST.items():
+            URL = "http://" + key + ":" + str(value) + "/postNode/newSvr"
+            print(URL)
+            try:
+                print("trying send added node to " + key + ":" + str(value) + " in SVR_LIST...........")
+                res = requests.post(URL, headers=reqHeader, data=json.dumps(newNodeList))
+                if res.status_code == 200:
+                    print("sent ok.")
+                else:
+                    print("Failed to send new node to " + key + ":" + str(value) + " in SVR_LIST >> 404")
+            except:
+                print("Failed to send new node to " + key + ":" + str(value) + " in SVR_LIST >> not responding")
+
+
     return result
 
+def readNodes() :
+    nodeDictList = []
+    conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER,
+                           passwd=DATABASE_SVR_PW, \
+                           database=DATABASE_SVR_NAME)
+
+    sql = "SELECT * FROM " + DATABASE_ND_TABLE
+    try :
+        with conn.cursor() as curs :
+            curs.execute(sql)
+            nodeList = curs.fetchall()
+
+            for line in nodeList :
+                node = Node(line[0], line[1], line[2])
+                nodeDictList.append(node.__dict__)
+    except:
+        print("Failed to get node data from database.")
+    finally:
+        conn.close()
+
+    return nodeDictList
+
 def row_count():
-    list = []
     try:
         list = readBlockchain()
         return len(list)
@@ -496,12 +608,13 @@ def row_count():
         return 0
 
 def compareMerge(bcDict):
-    heldBlock = []
-    bcToValidateForBlock = []
 
+    bcToValidateForBlock = []
+    heldBlock = []
 
     try:
-       heldBlock = readBlockchain()
+        blockchainList = readBlockchain()
+        heldBlock = blockchainList
     except:
         print("file open error in compareMerge or No database exists")
         print("call initSvr if this server has just installed")
@@ -544,12 +657,7 @@ def compareMerge(bcDict):
                 else:
                     return -1
             # [START] save it to database
-            blockchainList = []
-            for block in bcToValidateForBlock:
-                blockList = [block.index, block.previousHash, str(block.timestamp), block.data,
-                             block.currentHash, block.proof]
-                blockchainList.append(blockList)
-            writeBlockchain(blockchainList)
+            writeAllBlockchain(bcToValidateForBlock)
             # [END] save it to database
             return 1
         elif len(bcToValidateForBlock) < len(heldBlock):
@@ -575,7 +683,7 @@ def compareMerge(bcDict):
             if isValidNewBlock(bcToValidateForBlock[i], tempBlocks[i - 1]):
                 tempBlocks.append(bcToValidateForBlock[i])
             else:
-                print("Block Information Incorrect #2 " + tempBlocks.__dict__)
+                print("Block Information Incorrect #2 \n" + tempBlocks.__dict__)
                 return -1
 
         print("new block good")
@@ -586,23 +694,99 @@ def compareMerge(bcDict):
                 print("Block Information Incorrect #1")
                 return -1
         # [START] save it to csv
-        blockchainList = []
-        for block in bcToValidateForBlock:
-            blockList = [block.index, block.previousHash, str(block.timestamp), block.data, block.currentHash,
-                         block.proof]
-            blockchainList.append(blockList)
-        writeBlockchain(blockchainList)
+        writeAllBlockchain(bcToValidateForBlock)
         return 1
 
-def broadcastNewBlock():
-    #table의 블록데이터 전체를 읽어온다,
-    #SVR_LIST에 순차적으로 url post로 보내준다.
-    blockList = readBlockchain()
+def broadcastNewBlock(block):
+
+    isSuccees = True
+
+    blockDictList = []
+    blockDictList.append(block.__dict__)
+
+    reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
+
+    # request.post로 SVR_LIST의 모든 ip에 /validatedBock으로 보낸다.
+
+    resDictData = {'validationResult' : 'abnormal'}
+
+    for key, value in DATABASE_NODE_LIST.items() :
+        try:
+            print("Trying to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST...........")
+            URL = "http://" + key + ":" + str(value) + "/postBlock/validateBlock"
+            res = requests.post(URL, headers=reqHeader, data=json.dumps(blockDictList))
+            if res.status_code == 200:
+                print("sent ok.")
+                resDictData = json.loads(res.text)
+                print(resDictData)
+            else:
+                print("Failed to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST >> not responding : 404")
+                isSuccees = False
+        except:
+            print("Failed to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST >> not responding")
+            isSuccees = False
+
+        #응답이 abnormal 이라면 블록체인의 채굴에 실패로 간주 한다.
+
+        resultDict = resDictData.get('validationResult','abnormal')
+        print(resultDict)
+        if resultDict == 'abnormal' :
+            print("Failed to broadcast new block")
+            isSuccees = False
+        # 응답에 리스트가 []이거나 nomal 이라면  브로드캐스팅에 성공, 채굴을 완료한다.
+        else :
+            print("Succeed to broadcast new block")
+
+    return isSuccees
+
+def syncBlockChain() :
+    print("Trying to sync blockchain data with SVR_LIST...........")
+    blockList, readSuccess = readBlockchain()
+    isSuccess = True
+
+    blockDictList = []
+    for block in blockList :
+        blockDictList.append(block.__dict__)
+
+    reqHeader = {'Content-Type': 'application/json; charset=utf-8'}
+
+    # request.post로 SVR_LIST의 모든 ip에 /sync으로 보낸다.
+
+    for key, value in DATABASE_NODE_LIST.items():
+        try:
+            print("Trying to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST...........")
+            URL = "http://" + key + ":" + str(value) + "/postBlock/sync"
+            res = requests.post(URL, headers=reqHeader, data=json.dumps(blockDictList))
+            if res.status_code == 200:
+                print("sent ok.")
+
+                ####응답의 상태에 따라 나의 블록체인 테이블을 업데이트 할것인지 결정해야 한다.
+                #tempDict.append("we have a longer chain")
+                ## 실패
+                responsedMsg = json.loads(res.text)
+                print("responsedMsg : " + str(responsedMsg))
+                print(responsedMsg[-1])
+
+            else:
+                print("Failed to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST >> not responding : 404")
+                isSuccess = False
+        except:
+            print("Failed to send blockchain data to " + key + " : " + str(value) + " in SVR_LIST >> not responding")
+            isSuccess = False
+
+    if isSuccess :
+        print("Succeed to sync blockchain")
+    return isSuccess
 
 def initSvr():
+    isMasterSvr = MASTER
+    if isMasterSvr :
+        print("server : MASTER mode")
+    else :
+        print("server : SERVE mode")
+
     conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER,
-                           password=DATABASE_SVR_PW, \
-                           db=DATABASE_SVR_NAME, charset='utf8')
+                           password=DATABASE_SVR_PW, db=DATABASE_SVR_NAME, charset='utf8')
 
     try:
         sql = "CREATE TABLE " + DATABASE_BC_TABLE + "(" \
@@ -645,7 +829,7 @@ def initSvr():
         conn.close()
     ############################################################################################################## blockchain
     #내 서버의 mydb카운트를 가져온다
-    myblockCount = 0
+    myBlockCount = 0
 
     conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER,
                            password=DATABASE_SVR_PW, \
@@ -656,54 +840,61 @@ def initSvr():
         with conn.cursor() as curs:
             curs.execute(sql)
             myBlockCount = curs.fetchone()
-    except:
-        print("Failed to get rowCount from mmy database :" + DATABASE_TPSVR_IP + ":" + DATABASE_SVR_PORT + ":" + DATABASE_SVR_NAME)
-    finally:
-        curs.close()
 
-    #myDbCount 가 0이라면 쭉 실행
-    if myblockCount == 0 :
+        print("Success to get blockchain rowCount from my database, count >> " + str(myBlockCount[0]))
+    except:
+        print("Failed to get blockchain rowCount from my database >>" + DATABASE_SVR_IP + " : " + str(DATABASE_SVR_PORT) + " : " + DATABASE_SVR_NAME)
+    finally:
+        conn.close()
+
+    #master server가 아니고 myDbCount 가 0이라면 쭉 실행
+    if myBlockCount[0] == 0 and not isMasterSvr:
+        print("server : SERVE mode")
+
         #svr리스트의 db에 접속
         maxDbCount = 0
-        currentCount = 0
         maxCountIp = ""
         maxCountPort = 0
 
-        for key, value in SVR_LIST.items() :
+        for key, value in DATABASE_SVR_LIST.items() :
             conn = pymysql.connect(host= key, port= value, user=DATABASE_SVR_USER,
                                    password=DATABASE_SVR_PW, \
-                                   db=DATABASE_SVR_NAME, charset='utf8')
+                                   db="bcSvr6", charset='utf8')
         #순차적으로 count 쿼리 날림
 
             sql = "SELECT COUNT(*) FROM " + DATABASE_BC_TABLE
             try :
+                print("Trying to get number of blockchain data from table on" + key + " : " + str(value) + "...........")
                 with conn.cursor() as curs:
                     curs.execute(sql)
                     currentCount = curs.fetchone()
+                    print("Success to get number of blockchain data from table on" + key + " : " + str(value) + ", count >> " + str(currentCount[0]))
 
                     # 초기 count =0, 현재 count가 이전 count보다 높을 경우, maxCountIp와 포트번호를 교체
-                    if currentCount > dbCount :
+                    if currentCount[0] >= maxDbCount :
                         maxDbCount = currentCount
                         maxCountIp = key
                         maxCountPort = value
             except:
-                print("Failed to get blockchain data from svr_list")
+                print("Failed to get number of blockchain data from " + key + ":" + str(value))
             finally:
-                curs.close()
+                conn.close()
         #maxCountIp와 port로 접속
             conn = pymysql.connect(host=maxCountIp, port=maxCountPort, user=DATABASE_SVR_USER,
                                    password=DATABASE_SVR_PW, \
-                                   db=DATABASE_SVR_NAME, charset='utf8')
+                                   db="bcSvr1", charset='utf8')
             # selcet * 날리고 fetchall
             sql = "SELECT * FROM " + DATABASE_BC_TABLE
             try:
+                print("Trying to get blockchain data from table on" + key + ":" + str(value) + "...........")
                 with conn.cursor() as curs:
                     curs.execute(sql)
                     dbData = curs.fetchall()
+                    print("Success to get blockchain data")
             except:
-                print("Failed to ")
+                print("Failed to get blockchain data from " + key + ":" + str(value))
             finally:
-                curs.close()
+                conn.close()
         #가져온 dbData의 내용을 한행씩 해체하여 블록객체를 생성한 후 , 블록객체리스트에 담는다.
         getBlockList = []
         for line in dbData :
@@ -711,21 +902,23 @@ def initSvr():
             getBlockList.append(row)
         #나의 데이터베이스에 저장
         conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER, passwd=DATABASE_SVR_PW, \
-                               database=DATABASE_SVR_NAME)
+                               database=DATABASE_SVR_NAME, charset='utf8')
 
-        for blockchain in getBlockList :
-            try:
-                with conn.cursor() as curs:
-                    print(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
-                          blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash)
-                    sql = "INSERT INTO " + DATABASE_BC_TABLE + " VALUES (%s,%s,%s,%s,%s,%s,%s)"
-                    curs.execute(sql, (blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
-                                       blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash))
-                    conn.commit()
-            except:
-                print("fail to read blockchain table")
-            finally:
-                conn.close()
+        try:
+            print("Trying to write blockchain data on my database...........")
+            for blockchain in getBlockList :
+               with conn.cursor() as curs:
+                   print(blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
+                         blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash)
+                   sql = "INSERT INTO " + DATABASE_BC_TABLE + " VALUES (%s,%s,%s,%s,%s,%s,%s)"
+                   curs.execute(sql, (blockchain.index, blockchain.previousHash, str(blockchain.timestamp), \
+                                      blockchain.data, blockchain.currentHash, blockchain.proof, blockchain.merkleHash))
+                   conn.commit()
+            print("Success to write blockchain data on my database")
+        except:
+            print("Failed to write blockchain data on my database")
+        finally:
+            conn.close()
     else :
         pass
     ################################################################################################################ node
@@ -738,57 +931,63 @@ def initSvr():
 
     sql = "SELECT COUNT(*) FROM " + DATABASE_ND_TABLE
     try:
+
         with conn.cursor() as curs:
             curs.execute(sql)
             myNnodeCount = curs.fetchone()
+
+        print("Success to get node rowCount from my database, count >> " + str(myNnodeCount[0]))
     except:
-        print("Failed to get rowCount from mmy database :" + DATABASE_TPSVR_IP + ":" + DATABASE_SVR_PORT + ":" + DATABASE_SVR_NAME)
+        print("Failed to get nodelist from my database >> " + DATABASE_SVR_IP + " : " + str(DATABASE_SVR_PORT) + " : " + DATABASE_SVR_NAME)
     finally:
-        curs.close()
+        conn.close()
 
     # myDbCount 가 0이라면 쭉 실행
-    if myNnodeCount == 0:
+    if myNnodeCount[0] == 0 and not isMasterSvr:
         # svr리스트의 db에 접속
         dbCount = 0
-        currentCount = 0
         maxCountIp = ""
         maxCountPort = 0
 
-        for key, value in SVR_LIST.items():
+        for key, value in DATABASE_SVR_LIST.items():
             conn = pymysql.connect(host=key, port=value, user=DATABASE_SVR_USER,
-                                   password=DATABASE_SVR_PW, \
-                                   db=DATABASE_SVR_NAME, charset='utf8')
+                                   password=DATABASE_SVR_PW, db="bcSvr6", charset='utf8')
             # 순차적으로 count 쿼리 날림
 
             sql = "SELECT COUNT(*) FROM " + DATABASE_ND_TABLE
             try:
+                print("Trying to get number of node data from table on" + key + ":" + str(value) + "...........")
                 with conn.cursor() as curs:
                     curs.execute(sql)
                     currentCount = curs.fetchone()
 
+                    print("Success to get nodelist rowCount from my database, count : " + str(currentCount[0]))
                     # 초기 count =0, 현재 count가 이전 count보다 높을 경우, maxCountIp와 포트번호를 교체
-                    if currentCount > dbCount:
-                        dbCount = currentCount
+                    if currentCount[0] >= dbCount:
+                        dbCount = currentCount[0]
                         maxCountIp = key
                         maxCountPort = value
+
             except:
-                print("Failed to get blockchain data from svr_list")
+                print("Failed to get nodelist data from svr_list")
             finally:
-                curs.close()
+                conn.close()
             # maxCountIp와 port로 접속
             conn = pymysql.connect(host=maxCountIp, port=maxCountPort, user=DATABASE_SVR_USER,
                                    password=DATABASE_SVR_PW, \
-                                   db=DATABASE_SVR_NAME, charset='utf8')
+                                   db="bcSvr6", charset='utf8')
             # selcet * 날리고 fetchall
             sql = "SELECT * FROM " + DATABASE_ND_TABLE
             try:
+                print("Trying to get node data from table on" + key + ":" + str(value) + "...........")
                 with conn.cursor() as curs:
                     curs.execute(sql)
                     dbData = curs.fetchall()
+                print("Success to get node data")
             except:
-                print("Failed to ")
+                print("Failed to get node data from " + key + ":" + str(value))
             finally:
-                curs.close()
+                conn.close()
         # 가져온 dbData의 내용을 한행씩 해체하여 블록객체를 생성한 후 , 블록객체리스트에 담는다.
         getNodeList = []
         for line in dbData:
@@ -797,23 +996,25 @@ def initSvr():
         # 나의 데이터베이스에 저장
         conn = pymysql.connect(host=DATABASE_SVR_IP, port=DATABASE_SVR_PORT, user=DATABASE_SVR_USER,
                                passwd=DATABASE_SVR_PW, \
-                               database=DATABASE_SVR_NAME)
+                               database=DATABASE_SVR_NAME, charset='utf8')
 
-        for node in getNodeList:
-            try:
+
+        try:
+            for node in getNodeList:
+                print("Trying to write node data on my database...........")
                 with conn.cursor() as curs:
-                    print()
                     sql = "INSERT INTO " + DATABASE_ND_TABLE + " VALUES (%s,%s,%s)"
                     curs.execute(sql, (node.ip, node.port, node.tryConnect))
                     conn.commit()
-            except:
-                print("fail to read node table")
-            finally:
-                conn.close()
+            print("Success to write node data on my database")
+        except:
+            print("Failed to write node data on my database")
+        finally:
+            conn.close()
     else:
         pass
 
-    print("initSvr setting Done...")
+    print("initSvr setting Done.........")
     return 1
 
 # This class will handle any incoming request from
@@ -834,10 +1035,10 @@ class myHandler(BaseHTTPRequestHandler):
 
             if None != re.search('/block/getBlockData', self.path):
 
-                blockList = readBlockchain()
+                blockList, isSuccess = readBlockchain()
 
                 # block의 값이 None인 경우
-                if blockList == None:
+                if blockList == [] and isSuccess:
 
                     print("No Block Exists")
 
@@ -859,61 +1060,36 @@ class myHandler(BaseHTTPRequestHandler):
                 data.append("{info:no such api}")
                 self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
 
-
         elif None != re.search('/node/*', self.path):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
             if None != re.search('/node/addNode', self.path):
+                queryDict =[{'ip' : self.client_address[0],'port':self.client_address[1]}]
 
-                queryStr = urlparse(self.path).query.split(':')
-                print("client ip : " + self.client_address[0] + " query ip : " + queryStr[0])
+                res = addNode(queryDict, mode = 'new')
 
-                if self.client_address[0] != queryStr[0]:
-                    data.append("your ip address doesn't match with the requested parameter")
+                if res == 1:
+                    importedNodes = readNodes()
+                    data = importedNodes
+                    print("node added okay")
 
-                else:
-                    res = addNode(queryStr)
+                elif res == 0:
+                    data.append("caught exception while saving")
 
-                    if res == 1:
-                        importedNodes = readNodes(g_nodelstFileName)
-                        data = importedNodes
-                        print("node added okay")
-
-                    elif res == 0:
-                        data.append("caught exception while saving")
-
-                    elif res == -1:
-                        importedNodes = readNodes(g_nodelstFileName)
-                        data = importedNodes
-                        data.append("requested node is already exists")
+                elif res == -1:
+                    importedNodes = readNodes()
+                    data = importedNodes
+                    data.append("requested node is already exists")
 
                 self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
 
             elif None != re.search('/node/getNode', self.path):
-                importedNodes = readNodes(g_nodelstFileName)
+                importedNodes = readNodes()
                 data = importedNodes
                 self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
 
-        elif None != re.search('/txData/*', self.path):
-            self.send_response(200)
-            self.send_header('Content-type', 'application/json')
-            self.end_headers()
-
-            if None != re.search('/txData/getTxData', self.path):
-
-                txDataList = getTxData(1)
-
-                if txDataList == '':
-
-                    print("No txData Exists")
-
-                    data.append("no txData exists")
-                else:
-                    data = txDataList
-
-                self.wfile.write(bytes(json.dumps(data, sort_keys=True, indent=4), "utf-8"))
         else:
             self.send_response(403)
             self.send_header('Content-Type', 'application/json')
@@ -922,12 +1098,12 @@ class myHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
 
-        if None != re.search('/block/*', self.path):
+        if None != re.search('/postBlock/*', self.path):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
-            if None != re.search('/block/validateBlock/*', self.path):
+            if None != re.search('/postBlock/validateBlock', self.path):
                 ctype, pdict = cgi.parse_header(self.headers['content-type'])
                 # print(ctype) #print(pdict)
 
@@ -936,85 +1112,78 @@ class myHandler(BaseHTTPRequestHandler):
                     post_data = self.rfile.read(content_length)
                     receivedData = post_data.decode('utf-8')
                     print(type(receivedData))
-                    tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
-                    if isValidChain(tempDict) == True:
-                        tempDict.append("validationResult:normal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("validationResult:abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+                    tempDictList = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
 
-            elif None != re.search('/block/newtx', self.path):
+                    for tempDict in tempDictList :
+                        newBlock = Block(tempDict['index'], tempDict['previousHash'], tempDict['timestamp'], tempDict['data'], tempDict['currentHash'], \
+                                         tempDict['proof'], tempDict['merkleHash'])
+
+
+                    blockList, readSuccess = readBlockchain()
+
+                    if len(blockList) > 0:
+                        previousBlock = getLatestBlock(blockList)
+
+                        if isValidNewBlock(newBlock, previousBlock) == True:
+                            tempDict['validationResult'] = 'normal'
+                            result = writeBlockchain(newBlock)
+
+                            if result == 1 :
+                                print("Succeed to insert new block on database.")
+                            else :
+                                print("Failed to insert new block on database.")
+                        else:
+                            tempDict['validationResult'] = 'abnormal'
+                    else :
+                        result = writeBlockchain(newBlock)
+
+                        if result == 1:
+                            print("Succeed to insert new block on database.")
+                        else:
+                            print("Failed to insert new block on database.")
+
+                    self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+
+            if None != re.search('/postBlock/sync', self.path):
                 ctype, pdict = cgi.parse_header(self.headers['content-type'])
+
                 if ctype == 'application/json':
                     content_length = int(self.headers['Content-Length'])
                     post_data = self.rfile.read(content_length)
                     receivedData = post_data.decode('utf-8')
-                    print(type(receivedData))
-                    tempDict = json.loads(receivedData)
-                    res = newtx(tempDict)
-                    if res == 1:
-                        tempDict.append("accepted : it will be mined later")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -1:
-                        tempDict.append("declined : number of request txData exceeds limitation")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -2:
-                        tempDict.append("declined : error on data read or write")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("error : requested data is abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+                    tempDict = json.loads(receivedData)  # load your str into a list
+                    print(tempDict)
+                    res = compareMerge(tempDict)
+                    if res == -1:  # internal error
+                        tempDict.append("internal server error")
+                    elif res == -2:  # block chain info incorrect
+                        tempDict.append("block chain info incorrect")
+                    elif res == 1:  # normal
+                        tempDict.append("accepted")
+                    elif res == 2:  # identical
+                        tempDict.append("already updated")
+                    elif res == 3:  # we have a longer chain
+                        tempDict.append("we have a longer chain")
+                    self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
 
-            # -----------------------------------------V02 : 완
-            # "/block/syncTx'" 로 오는 요청은 다시 sync과정을 거치지 않는다.
-            elif None != re.search('/block/syncTx', self.path) :
-                ctype, pdict = cgi.parse_header(self.headers['content-type'])
-                if ctype == 'application/json':
-                    content_length = int(self.headers['Content-Length'])
-                    post_data = self.rfile.read(content_length)
-                    receivedData = post_data.decode('utf-8')
-                    print(type(receivedData))
-                    tempDict = json.loads(receivedData)
-                    res = newtx(tempDict, mode='sync')
-
-                    if res == 1:
-                        tempDict.append("accepted : it will be mined later")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -1:
-                        tempDict.append("declined : number of request txData exceeds limitation")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    elif res == -2:
-                        tempDict.append("declined : error on data read or write")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-                    else:
-                        tempDict.append("error : requested data is abnormal")
-                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-
-        elif None != re.search('/node/*', self.path):
+        elif None != re.search('/postNode/*', self.path):
             self.send_response(200)
             self.send_header('Content-type', 'application/json')
             self.end_headers()
 
-            if None != re.search(g_receiveNewBlock, self.path):  # /node/receiveNewBlock
-                content_length = int(self.headers['Content-Length'])
-                post_data = self.rfile.read(content_length)
-                receivedData = post_data.decode('utf-8')
-                tempDict = json.loads(receivedData)  # load your str into a list
-                print(tempDict)
-                res = compareMerge(tempDict)
-                if res == -1:  # internal error
-                    tempDict.append("internal server error")
-                elif res == -2:  # block chain info incorrect
-                    tempDict.append("block chain info incorrect")
-                elif res == 1:  # normal
-                    tempDict.append("accepted")
-                elif res == 2:  # identical
-                    tempDict.append("already updated")
-                elif res == 3:  # we have a longer chain
-                    tempDict.append("we have a longer chain")
-                self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
-
+            if None != re.search('/postNode/newSvr', self.path):
+                ctype, pdict = cgi.parse_header(self.headers['content-type'])
+                print("get response")
+                if ctype == 'application/json':
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length)
+                    receivedData = post_data.decode('utf-8')
+                    tempDict = json.loads(receivedData)  # load your str into a list
+                    if addNode(tempDict, mode='sync') == 1:
+                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+                    else:
+                        tempDict.append("error : cannot add node to sync")
+                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
         else:
             self.send_response(404)
             self.send_header('Content-Type', 'application/json')

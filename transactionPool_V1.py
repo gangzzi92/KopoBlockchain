@@ -35,8 +35,12 @@ class txData:
         self.uuid = uuid
         self.transactionTime = transactionTime
 
-#블록생성에 성공한 거래내역들의 commitYN을 1로 바꿔줄 때
-def updateTx(txToMining):
+def updateTx(txToMining, mode = 'update'):
+    if mode == 'update' :
+        commit = "1"
+    else :
+        commit = "0"
+
     uuidList = []
     conn = pymysql.connect(host=DATABASE_TP_IP, port=DATABASE_TP_PORT, user=DATABASE_TP_USER,
                            password=DATABASE_TP_PW, db=DATABASE_TP_NAME,
@@ -54,20 +58,19 @@ def updateTx(txToMining):
         with conn.cursor() as curs:
             for uuidNum in uuidList:
                 print("Updating table data to compare...")
-                sql = "UPDATE " + DATABASE_TP_TABLE + " SET commitYN=1 WHERE uuid='" + uuidNum + "'"  # 실행 할 쿼리문 입력
-                curs.execute(sql)  # 쿼리문 실행
-        print("Succecss to update database......")
+                sql = "UPDATE " + DATABASE_TP_TABLE + " SET commitYN=" + commit + " WHERE uuid='" + uuidNum + "'"
+                curs.execute(sql)
+        print("Succecss to update database.")
         conn.commit()
     except:
-        print("Cannot access to database to update")
+        print("Cannot access to database to update.")
         conn.close()
         return False
     finally:
         conn.close()
         return True
 
-#node(postman)에서 새로운 거래내역(newTx) 입력을 요청했을 때
-def newTx(txToMining, mode='new'):
+def newTx(txToMining):
     newTxData = []
 
     conn = pymysql.connect(host=DATABASE_TP_IP, port=DATABASE_TP_PORT, user=DATABASE_TP_USER, password=DATABASE_TP_PW, db=DATABASE_TP_NAME,
@@ -82,7 +85,7 @@ def newTx(txToMining, mode='new'):
 
 
     if len(newTxData) > MAX_GET_DATA_LISTS :
-        print("number of requested txData exceeds limitation")
+        print("number of requested txData exceeds limitation.")
         return -2
 
     conn = pymysql.connect(host=DATABASE_TP_IP, port=DATABASE_TP_PORT, user=DATABASE_TP_USER, password=DATABASE_TP_PW,
@@ -91,20 +94,20 @@ def newTx(txToMining, mode='new'):
         with conn.cursor() as curs:
             for txRow in newTxData:
                 print(txRow.__dict__)
-                print("start insert into table....")
-                sql = "INSERT INTO " + DATABASE_TP_TABLE + " VALUES (%s, %s, %s, %s, %s, %s, %s)"  # 실행 할 쿼리문 입력
-                curs.execute(sql, (0, txRow.sender, txRow.amount, txRow.receiver, txRow.fee, txRow.uuid, txRow.transactionTime))# 쿼리문 실행
-                # curs.execute(sql)  # 쿼리문 실행
+                print("Start inserting into table....")
+                sql = "INSERT INTO " + DATABASE_TP_TABLE + " VALUES (%s, %s, %s, %s, %s, %s, %s)"
+                curs.execute(sql, (0, txRow.sender, txRow.amount, txRow.receiver, txRow.fee, txRow.uuid, txRow.transactionTime))
+
             conn.commit()
+        print("Succeed to insert txData on database.")
     except :
-        print("cannot access to database to insert")
+        print("Failed to access database for insert.")
         return -1
     finally:
         conn.close()
 
     return 1
 
-#transation_pool의 데이터를 가져와 반환
 def getTxData(mode='zero') :
     txDataList = []
     isSuccess = True
@@ -132,15 +135,15 @@ def getTxData(mode='zero') :
                     zeroCount = zeroCount + 1
         conn.commit()
     except :
-        print("Failed to access to database..........")
+        print("Failed to access to database.")
         isSuccess = False
     finally:
         conn.close()
 
     return txDataList, isSuccess
 
-#create table 한다
 def initSvr() :
+    print("server : TRANSACTION mode")
     conn = pymysql.connect(host=DATABASE_TP_IP, port=DATABASE_TP_PORT, user=DATABASE_TP_USER, password=DATABASE_TP_PW, db=DATABASE_TP_NAME,
                            charset='utf8')
 
@@ -163,17 +166,13 @@ def initSvr() :
         print("Failed to create table " + DATABASE_TP_TABLE + " on " + DATABASE_TP_NAME)
     finally:
         conn.close()
+        print("initSvr setting Done...")
 
 
 
 class myHandler(BaseHTTPRequestHandler):
 
-    # def __init__(self, request, client_address, server):
-    #    BaseHTTPRequestHandler.__init__(self, request, client_address, server)
-
-    # Handler for the GET requests
-    # get방식으로 보내는 요청의 종류로는 블록체인의 데이터 요청, 블록 생성, 노드데이터 요청, 노드생성이 존재한다.
-    def do_GET(self):
+     def do_GET(self):
         data = []  # response json data
         if None != re.search('/getTxData/*', self.path):
             self.send_response(200)
@@ -186,11 +185,11 @@ class myHandler(BaseHTTPRequestHandler):
 
                 if txDataList == '':
                     if isSucces:
-                        print("No txData Exists commitYn is 0")
-                        data.append("No txData Exists commitYn is 0")
+                        print("No txData Exists commitYn is 0.")
+                        data.append("No txData Exists commitYn is 0.")
                     else:
-                        print("Failed to access to database")
-                        data.append("Failed to access to database")
+                        print("Failed to access to database.")
+                        data.append("Failed to access to database.")
                 else:
                     for i in txDataList:
                         print(i.__dict__)
@@ -205,11 +204,11 @@ class myHandler(BaseHTTPRequestHandler):
 
                 if txDataList == '':
                     if isSucces :
-                        print("No txData Exists")
-                        data.append("No txData Exists")
+                        print("No txData Exists.")
+                        data.append("No txData Exists.")
                     else :
-                        print("Failed to access to database")
-                        data.append("Failed to access to database")
+                        print("Failed to access to database.")
+                        data.append("Failed to access to database.")
                 else:
                     for i in txDataList:
                         print(i.__dict__)
@@ -226,7 +225,7 @@ class myHandler(BaseHTTPRequestHandler):
             self.end_headers()
         # ref : https://mafayyaz.wordpress.com/2013/02/08/writing-simple-http-server-in-python-with-rest-and-json/
 
-    def do_POST(self):
+     def do_POST(self):
 
         if None != re.search('/txData/*', self.path):
             self.send_response(200)
@@ -243,7 +242,24 @@ class myHandler(BaseHTTPRequestHandler):
                     receivedData = post_data.decode('utf-8')
                     print(type(receivedData))
                     tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
-                    if updateTx(tempDict) == True:
+                    if updateTx(tempDict, mode = 'update') == True:
+                        tempDict.append("success")
+                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+                    else:
+                        tempDict.append("failed")
+                        self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
+
+            if None != re.search('/txData/rollBack', self.path):
+                ctype, pdict = cgi.parse_header(self.headers['content-type'])
+                # print(ctype) #print(pdict)
+
+                if ctype == 'application/json':
+                    content_length = int(self.headers['Content-Length'])
+                    post_data = self.rfile.read(content_length)
+                    receivedData = post_data.decode('utf-8')
+                    print(type(receivedData))
+                    tempDict = json.loads(receivedData)  # load your str into a list #print(type(tempDict))
+                    if updateTx(tempDict, mode = "rollback") == True:
                         tempDict.append("success")
                         self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
                     else:
@@ -260,16 +276,16 @@ class myHandler(BaseHTTPRequestHandler):
                     tempDict = json.loads(receivedData)
                     res = newTx(tempDict)
                     if res == 1:
-                        tempDict.append("accepted : it will be mined later")
+                        tempDict.append("accepted : it will be mined later.")
                         self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
                     elif res == -1:
-                        tempDict.append("declined : number of request txData exceeds limitation")
+                        tempDict.append("declined : number of request txData exceeds limitation.")
                         self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
                     elif res == -2:
-                        tempDict.append("declined : error on data read or write")
+                        tempDict.append("declined : error on data read or write.")
                         self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
                     else:
-                        tempDict.append("error : requested data is abnormal")
+                        tempDict.append("error : requested data is abnormal.")
                         self.wfile.write(bytes(json.dumps(tempDict), "utf-8"))
 
         else:
